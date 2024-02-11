@@ -16,7 +16,11 @@ editor_options:
 ```{r message=FALSE, warning=FALSE}
 # packages/functions
 library(tidyverse)
+library(tidytext)
 library(tidymodels)
+library(vip)
+library(glue)
+library(scales)
 theme_set(theme_minimal())
 
 `%ni%` <- negate(`%in%`)
@@ -33,14 +37,14 @@ df_raw <- readxl::read_xlsx(here::here("01_data",
 
 ## Data processing
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 # df_raw %>% 
 #   glimpse()
 
 # df_raw %>% 
 #   View()
 
-# parse date (NOTE: 2 different formats...)
+### 1) parse dates (NOTE: 2 different formats...)
 date_1 <- df_raw %>%
   slice(1:55) %>% 
   select(anr, datum) %>% 
@@ -58,18 +62,376 @@ new_dates <- date_1 %>%
   arrange(anr)
 
 # check
-summary(new_dates)
+# summary(new_dates)
 
 # recreate df
 df <- df_raw %>% 
   arrange(anr) %>% 
   mutate(datum = new_dates$datum)
+
+
+### 2) create decade
+df <- df %>%  
+  mutate(decade =  floor_date(datum, 
+                              unit = "10 years"))
+
+
+### 3) create factors
+df <- df %>% 
+  mutate(rechtsform = factor(
+    x = rechtsform,
+    labels = c("Obligatorisches Referendum",
+               "Falkultatives Referendum",
+               "Volksinitiative",
+               "Direkter Gegenentwurf",
+               "Stichfrage")
+  ))
+
+df <- df %>% 
+  mutate(d1e1 = factor(
+    x = d1e1,
+    labels = c("Staatsordnung",
+               "Aussenpolitik",
+               "Sicherheitspolitik",
+               "Wirtschaft",
+               "Landwirtschaft",
+               "Öffentliche Finanzen",
+               "Energie",
+               "Verkehr und Infrastruktur",
+               "Umwelt und Lebensraum",
+               "Sozialpolitik",
+               "Bildung und Forschung",
+               "Kultur, Religion, Medien")
+  ))
+
+df <- df %>% 
+  filter(!is.na(annahme),
+         annahme != ".") %>%
+  mutate(annahme = parse_number(annahme),
+         annahme = factor(
+           x = annahme,
+           labels = c("Nein", "Ja")
+         ))
+
+df <- df %>% 
+  filter(br_pos != ".") %>% 
+  mutate(across(c(br_pos, sr_pos, nr_pos), ~factor(x = .,
+                                                labels = c("Befürwortend", 
+                                                           "Ablehnend",
+                                                           "keine"))))
+
+df <- df %>% 
+  mutate(br_ja = br_pos == "Befürwortend",
+         sr_ja = sr_pos == "Befürwortend",
+         nr_ja = nr_pos == "Befürwortend")
+
+
+### 4) numeric variables
+df <- df %>% 
+  mutate(d1e2 = ifelse(d1e2 == ".", NA_character_, d1e2),
+         d1e3 = ifelse(d1e3 == ".", NA_character_, d1e3),
+         d1e2 = parse_number(d1e2),
+         d1e3 = parse_number(d1e3))
+```
+
+\
+\
+
+## EDA
+
+### Over time
+
+```{r message=FALSE, warning=FALSE, fig.width=12, fig.height=8}
+### 1)
+df %>% 
+  count(decade, rechtsform) %>% 
+  mutate(rechtsform = fct_reorder(rechtsform,
+                                  n,
+                                  .fun = max)) %>% 
+  ggplot(aes(decade, n)) + 
+  geom_line(aes(color = rechtsform,
+                group = rechtsform),
+            linewidth = 1) + 
+  labs(title = "\nAnzahl Abstimmungen über Zeit nach Rechtsform",
+       subtitle = "Aggregationsstufe: 10 Jahre\n",
+       x = "\nJahr",
+       y = "Anzahl\n",
+       color = "Rechtsform") + 
+  scale_color_discrete(guide = guide_legend(reverse = TRUE))
+
+
+### 2)
+df %>% 
+  count(annahme) %>% 
+  ggplot(aes(annahme, n)) + 
+  geom_col(aes(fill = annahme),
+           show.legend = FALSE) + 
+  geom_label(aes(label = glue("{n}"))) +
+  labs(title = "\nAnzahl angenommene vs. abgelehnte Initiativen\n",
+       x = "\nAngenommen?",
+       y = "")
+
+
+### 3)
+df %>% 
+  count(rechtsform, annahme) %>% 
+  mutate(rechtsform = fct_reorder(rechtsform, 
+                                  n)) %>% 
+  ggplot(aes(annahme, n)) + 
+  geom_col(aes(fill = rechtsform),
+           position = "dodge2") + 
+  geom_label(aes(label = glue("{n}"),
+                 group = rechtsform),
+             position = position_dodge(width = .9)) + 
+  labs(title = "\nAnzahl angenommene vs. abgelehnte Initiativen nach Rechtsform\n",
+       x = "\nAngenommen?",
+       y = "",
+       fill = "Rechtsform")
+
+
+### 4) 
+df %>% 
+  group_by(rechtsform) %>% 
+  summarise(n_angenommen = sum(annahme == "Ja"),
+            n_abgelehnt = sum(annahme == "Nein"),
+            n_tot = n_angenommen + n_abgelehnt,
+            pct_angenommen = n_angenommen / n_tot) %>% 
+  mutate(rechtsform = fct_reorder(rechtsform, 
+                                  pct_angenommen)) %>% 
+  ggplot(aes(pct_angenommen, rechtsform)) + 
+  geom_col(aes(fill = rechtsform),
+           position = "dodge") +
+  geom_label(aes(label = glue("{round(100 * pct_angenommen, 2)}%"))) + 
+  scale_x_continuous(breaks = seq(0, 1, 0.2),
+                     labels = scales::percent_format()) + 
+  expand_limits(x = c(0, 1)) +
+  labs(title = "\nProzentualer Anteil angenommener Initiativen nach Rechtsform\n",
+       x = "",
+       y = "",
+       fill = "Rechtsform")
+
+### 5)
+df_plot <- df %>% 
+  group_by(rechtsform, d1e1) %>% 
+  summarise(n_angenommen = sum(annahme == "Ja"),
+            n_abgelehnt = sum(annahme == "Nein"),
+            n_tot = n_angenommen + n_abgelehnt,
+            pct_angenommen = n_angenommen / n_tot) %>%
+  mutate(d1e1 = glue("{d1e1} ({n_tot})"))
+
+rechtsformen <- df_plot %>% 
+  pull(rechtsform) %>% 
+  unique()
+
+for(i in rechtsformen) {
+  
+  print(
+    
+    df_plot %>% 
+      filter(rechtsform == i) %>% 
+      mutate(d1e1 = fct_reorder(d1e1, pct_angenommen)) %>% 
+      ggplot(aes(pct_angenommen, d1e1)) + 
+      geom_col(aes(fill = d1e1),
+               position = "dodge",
+               show.legend = FALSE) +
+      geom_label(aes(label = glue("{round(100 * pct_angenommen, 2)}%"))) + 
+      scale_x_continuous(breaks = seq(0, 1, 0.2),
+                         labels = scales::percent_format()) + 
+      expand_limits(x = c(0, 1)) +
+      labs(title = glue("\nProzent Angenommen - {i}"),
+           subtitle = "Totale Anzahl Beobachtungen jeweils in (...)\n",
+           x = "",
+           y = "") 
+    
+  )
+  
+}
 ```
 
 
-```{r}
+### Words/descriptions
 
+```{r message=FALSE, warning=FALSE}
+### 1. create df_words
+df_words <- df %>% 
+  select(anr, datum, decade, 
+         rechtsform, annahme,
+         volkja, volknein, volkja_proz,
+         kt_ja, kt_nein, ktjaproz,
+         berecht, stimmen, bet, leer, ungultig, gultig,
+         kurzbetitel) %>% 
+  unnest_tokens("word",
+                kurzbetitel)
+
+### 2. remove stopwords
+# df_words %>% 
+#   count(word, 
+#         sort = TRUE)
+
+stop_words_DE <- tibble(
+  word = c(stopwords::stopwords("de"),
+           "ja", "nein", "initiative")
+)
+
+df_words_processed <- df_words %>% 
+  anti_join(stop_words_DE,
+            by = "word") %>% 
+  filter(!is.na(word))
+
+### 3. word stemming
+df_words_processed <- df_words_processed %>% 
+  mutate(stem = SnowballC::wordStem(word,
+                                    language = "german")) %>% 
+  relocate(word, stem, .after = anr)
+
+### 4. create sparse matrix
+df_words_matrix <- df_words_processed %>% 
+  add_count(stem,
+            name = "n_stem") %>% 
+  filter(n_stem > 10) %>% 
+  distinct(anr, stem) %>% 
+  mutate(stem_value = 1) %>% 
+  pivot_wider(
+    names_from = stem,
+    values_from = stem_value,
+    values_fill = list(stem_value = 0)
+  )
+
+
+df_model <- df_words_matrix %>% 
+  inner_join(df %>% 
+               select(anr, datum, rechtsform, 
+                      d1e1, volkja_proz, 
+                      br_ja, sr_ja, nr_ja,
+                      annahme),
+             by = "anr") %>% 
+  relocate(anr, datum, rechtsform, 
+           d1e1, volkja_proz, 
+           annahme, .after = anr)
 ```
 
+\
+\
+
+## Train a model
+
+```{r message=FALSE, warning=FALSE}
+### 1) Testing and training set
+set.seed(1234)
+split <- initial_split(df_model, 
+                       strata = annahme)
+train <- training(split)
+test <- testing(split)
+
+
+### 2) Recipe
+rec <- recipe(volkja_proz ~ .,
+              data = train) %>% 
+  update_role(anr, datum, annahme, 
+              new_role = "ID") %>% 
+  step_dummy(rechtsform, d1e1) %>% 
+  step_mutate(br_ja = as.numeric(br_ja),
+              sr_ja = as.numeric(sr_ja), 
+              nr_ja = as.numeric(nr_ja)) %>% 
+  step_zv(all_numeric(), 
+          -all_outcomes()) %>%
+  step_normalize(all_numeric(), 
+                 -all_outcomes())
+
+rec_prep <- rec %>% 
+  prep(strings_as_factors = FALSE)
+
+# rec_prep %>%
+#   juice() %>%
+#   glimpse()
+
+
+### 3) Specify model
+lasso_spec <- linear_reg(penalty = 0.1,
+                         mixture = 1) %>% 
+  set_engine("glmnet")
+
+wf <- workflow() %>% 
+  add_recipe(rec)
+
+
+### 4) Fit model
+lasso_fit <- wf %>% 
+  add_model(lasso_spec) %>% 
+  fit(data = train)
+
+# lasso_fit %>% 
+#   extract_fit_parsnip() %>% 
+#   tidy()
+```
+
+
+### Tune lasso parameters
+
+```{r message=FALSE, warning=FALSE, fig.width=12, fig.height=8}
+### 1) Setup
+set.seed(1234)
+df_boot <- bootstraps(train, 
+                      strata = annahme)
+
+tune_spec <- linear_reg(penalty = tune(), 
+                        mixture = 1) %>%
+  set_engine("glmnet")
+
+lambda_grid <- grid_regular(penalty(), 
+                            levels = 50)
+
+
+### 2) Fit resamples
+set.seed(1234)
+lasso_grid <- tune_grid(wf %>% 
+                          add_model(tune_spec),
+                        resamples = df_boot,  
+                        grid = lambda_grid)
+
+lasso_grid %>% 
+  collect_metrics() %>% 
+  ggplot(aes(penalty, mean, 
+             color = .metric)) + 
+  geom_errorbar(aes(ymin = mean - std_err,
+                    ymax = mean + std_err),
+                alpha = 0.5) + 
+  geom_line(linewidth = 1.5) + 
+  facet_wrap(~ .metric,
+             scales = "free",
+             nrow = 2)
+
+
+### 3) Select best model
+lowest_rmse <- lasso_grid %>%
+  select_best("rmse")
+
+final_lasso <- finalize_workflow(wf %>% 
+                                   add_model(tune_spec),
+                                 lowest_rmse)
+
+
+### 3) Visualize results
+final_lasso %>%
+  fit(train) %>%
+  pull_workflow_fit() %>%
+  vi(lambda = lowest_rmse$penalty) %>%
+  mutate(
+    Importance = abs(Importance),
+    Variable = fct_reorder(Variable, Importance)
+  ) %>% 
+  filter(Importance > 0) %>% 
+  ggplot(aes(x = Importance, y = Variable, fill = Sign)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(y = "")
+
+
+last_fit(
+  final_lasso,
+  split
+) %>%
+  collect_metrics()
+```
 
 
