@@ -1,0 +1,75 @@
+---
+title: "<br><br>Swissvotes Database<br><br>"
+output: 
+  html_document:
+    toc: yes
+    code_folding: show
+editor_options: 
+  chunk_output_type: console
+---
+
+\
+\
+
+## Setup
+
+```{r message=FALSE, warning=FALSE}
+# packages/functions
+library(tidyverse)
+library(tidymodels)
+theme_set(theme_minimal())
+
+`%ni%` <- negate(`%in%`)
+
+# data
+df_raw <- readxl::read_xlsx(here::here("01_data",
+                                       "DATASET XLSX 31-01-2024.xlsx"),
+                            sheet = "DATA") %>% 
+  janitor::clean_names()
+```
+
+\
+\
+
+## Data processing
+
+```{r}
+# df_raw %>% 
+#   glimpse()
+
+# df_raw %>% 
+#   View()
+
+# parse date (NOTE: 2 different formats...)
+date_1 <- df_raw %>%
+  slice(1:55) %>% 
+  select(anr, datum) %>% 
+  mutate(datum = dmy(datum))
+
+date_2 <- df_raw %>% 
+  slice(56:nrow(.)) %>% 
+  select(anr, datum) %>% 
+  mutate(datum = as.numeric(datum),
+         datum = as.Date(datum,
+                         origin = "1899-12-30"))
+
+new_dates <- date_1 %>% 
+  bind_rows(date_2) %>% 
+  arrange(anr)
+
+# check
+summary(new_dates)
+
+# recreate df
+df <- df_raw %>% 
+  arrange(anr) %>% 
+  mutate(datum = new_dates$datum)
+```
+
+
+```{r}
+
+```
+
+
+
