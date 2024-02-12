@@ -107,19 +107,46 @@ df <- df %>%
                  "Umwelt und Lebensraum",
                  "Sozialpolitik",
                  "Bildung und Forschung",
-                 "Kultur, Religion, Medien"))) %>% 
-  mutate(across(c(br_pos, sr_pos, nr_pos), ~factor(x = .,
-                                                   labels = c("Befürwortend", 
-                                                              "Ablehnend",
-                                                              "keine",
-                                                              "Vorzug Gegenentwurf"))))
+                 "Kultur, Religion, Medien")),
+    dep = factor(
+      x = dep,
+      labels = c("EDA",
+                 "EDI",
+                 "EJDP",
+                 "VBS",
+                 "EFD",
+                 "WBF",
+                 "UVEK",
+                 "BK"))
+  ) %>% 
+  mutate(
+    across(c(br_pos, sr_pos, nr_pos), ~factor(x = .,
+                                              labels = c("Befürwortend", 
+                                                         "Ablehnend",
+                                                         "keine",
+                                                         "Vorzug Gegenentwurf")))
+  ) %>% 
+  mutate(
+    across(c(p_svp, p_sps, p_fdp, p_mitte), ~ case_when(
+      . == "1" ~ 1,
+      . == "2" ~ 2,
+      TRUE ~ 3
+    ))
+  ) %>% 
+  mutate(
+    across(c(p_svp, p_sps, p_fdp, p_mitte), ~factor(x = .,
+                                                    labels = c("Ja-Parole",
+                                                               "Nein-Parole",
+                                                               "Keine Parole")))
+  )
 
 ### 5) numeric variables
 df <- df %>% 
   mutate(annahme = parse_number(annahme),
          br_ja = br_pos == "Befürwortend",
          sr_ja = sr_pos == "Befürwortend",
-         nr_ja = nr_pos == "Befürwortend")
+         nr_ja = nr_pos == "Befürwortend",
+         bet = parse_number(bet))
 ```
 
 \
@@ -150,6 +177,18 @@ df %>%
 
 ### 2)
 df %>% 
+  filter(!is.na(bet)) %>% 
+  ggplot(aes(datum, bet)) + 
+  geom_line(group = 1) +
+  geom_smooth() +
+  labs(title = "\nStimmbeteiligung über Zeit\n",
+       x = "\nJahr",
+       y = "Stimmbeteiligung\n") + 
+  scale_y_continuous(labels = percent_format(scale = 1))
+
+
+### 3)
+df %>% 
   filter(!is.na(annahme)) %>% 
   mutate(annahme = ifelse(annahme == 1, "Ja", "Nein")) %>% 
   count(annahme) %>% 
@@ -162,7 +201,7 @@ df %>%
        y = "")
 
 
-### 3)
+### 4)
 df %>% 
   filter(!is.na(annahme)) %>% 
   mutate(annahme = ifelse(annahme == 1, "Ja", "Nein")) %>% 
@@ -181,7 +220,7 @@ df %>%
        fill = "Rechtsform")
 
 
-### 4) 
+### 5) 
 df %>% 
   filter(!is.na(annahme)) %>% 
   mutate(annahme = ifelse(annahme == 1, "Ja", "Nein")) %>% 
@@ -204,7 +243,7 @@ df %>%
        y = "",
        fill = "Rechtsform")
 
-### 5)
+### 6)
 df_plot <- df %>% 
   mutate(annahme = ifelse(annahme == 1, "Ja", "Nein")) %>% 
   filter(!is.na(annahme)) %>% 
@@ -293,12 +332,15 @@ df_words_matrix <- df_words_processed %>%
 ### 4. Create data set for modelling
 df_model <- df_words_matrix %>% 
   inner_join(df %>% 
-               select(anr, datum, rechtsform, 
-                      d1e1, br_ja, sr_ja, nr_ja,
-                      volkja_proz, annahme),
-             by = "anr") %>% 
-  relocate(anr, datum, rechtsform, 
-           d1e1, volkja_proz, annahme, .after = anr)
+               select(anr, datum, annahme, volkja_proz,
+                      rechtsform, d1e1,
+                      br_ja, sr_ja, nr_ja,
+                      p_svp, p_sps, p_fdp, p_mitte,
+                      bet),
+             by = "anr")
+
+df_model %>% 
+  skimr::skim()
 ```
 
 \
@@ -320,21 +362,20 @@ test <- testing(split)
 rec <- recipe(volkja_proz ~ .,
               data = train) %>% 
   update_role(anr, annahme, datum, 
-              new_role = "ID") %>% 
-  step_dummy(rechtsform, d1e1) %>% 
+              new_role = "ID") %>%
+  step_dummy(rechtsform, d1e1,
+             p_svp, p_sps, p_fdp, p_mitte) %>% 
   step_mutate(br_ja = as.numeric(br_ja),
-              sr_ja = as.numeric(sr_ja), 
-              nr_ja = as.numeric(nr_ja)) %>%  
-  step_impute_median(all_predictors()) %>% 
-  step_zv(all_numeric(), 
-          -all_outcomes()) %>%
-  step_normalize(all_numeric(), 
-                 -all_outcomes())
+              sr_ja = as.numeric(sr_ja),
+              nr_ja = as.numeric(nr_ja)) %>%
+  step_impute_mean(all_predictors()) %>% 
+  step_zv(all_predictors()) %>%
+  step_normalize(all_predictors())
 
-# rec %>%
-#   prep() %>%
-#   juice() %>%
-#   View()
+rec %>%
+  prep() %>%
+  juice() %>% 
+  glimpse()
 
 
 
